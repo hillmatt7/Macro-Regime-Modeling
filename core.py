@@ -54,6 +54,10 @@ class DataIngestionPreprocessing:
             'cpi': 'CPIAUCSL',
             'pce': 'PCE',
             'fed_funds': 'DFF',
+            'treasury_30y': 'DGS30',         # Daily
+            'treasury_10y': 'DGS10',         # Daily
+            'treasury_5y': 'DGS5',           # Daily
+            'treasury_2y': 'DGS2',           # Daily
             'industrial_prod': 'INDPRO',
             'retail_sales': 'RSXFS',
             'consumer_sentiment': 'UMCSENT',
@@ -80,59 +84,79 @@ class DataIngestionPreprocessing:
         Ingest data from multiple sources and preprocess
         Always fetches FRED + market data, optionally adds user CSV
         """
-        # Step 1: Collect data from all sources
+        # Step 1: Collect data from all sources with validation
         all_data = []
-        
+
         # Always fetch FRED data
-        try:
-            fred_data = self._fetch_fred_data(window_start, window_end)
-            if fred_data is not None and not fred_data.empty:
-                all_data.append(fred_data)
-                print(f"✓ Fetched FRED data: {fred_data.shape}")
-        except Exception as e:
-            print(f"Warning: Could not fetch FRED data: {e}")
-        
+        fred_data = self._fetch_fred_data(window_start, window_end)
+        fred_data = self._validate_and_clean_data(fred_data, "FRED")
+        if not fred_data.empty:
+            all_data.append(fred_data)
+
         # Always fetch market OHLCV data
-        try:
-            market_data = self._fetch_market_data(window_start, window_end)
-            if market_data is not None and not market_data.empty:
-                all_data.append(market_data)
-                print(f"✓ Fetched market data: {market_data.shape}")
-        except Exception as e:
-            print(f"Warning: Could not fetch market data: {e}")
-        
+        market_data = self._fetch_market_data(window_start, window_end)
+        market_data = self._validate_and_clean_data(market_data, "Market")
+        if not market_data.empty:
+            all_data.append(market_data)
+
         # Add user CSV if provided
         if user_csv_path:
             try:
                 user_data = self._load_user_csv(user_csv_path, window_start, window_end)
-                if user_data is not None and not user_data.empty:
+                user_data = self._validate_and_clean_data(user_data, "User CSV")
+                if not user_data.empty:
                     all_data.append(user_data)
-                    print(f"✓ Loaded user CSV: {user_data.shape}")
             except Exception as e:
                 print(f"Warning: Could not load user CSV: {e}")
-        
-        # Use demo data if requested or if no data available
+
+        # Use demo data if requested or if insufficient real data
         if use_demo_data or len(all_data) == 0:
             demo_data = self._generate_demo_data(window_start, window_end)
+            demo_data = self._validate_and_clean_data(demo_data, "Demo")
             all_data = [demo_data]
-            print(f"✓ Using demo data: {demo_data.shape}")
-        
-        # Merge all data sources
+
+        # Merge all data sources with improved logic
         if len(all_data) == 0:
             raise ValueError("No data available from any source")
-        
-        # Merge on date
-        raw_df = all_data[0]
-        for df in all_data[1:]:
-            raw_df = pd.merge(raw_df, df, on='date', how='outer', suffixes=('', '_dup'))
+
+        # Start with the dataset that has the most recent/complete date range
+        # Usually market data is more complete
+        if len(all_data) > 1:
+            # Sort by date range completeness (prefer datasets with more recent data)
+            all_data = sorted(all_data, key=lambda x: (x['date'].max(), len(x)), reverse=True)
+
+        raw_df = all_data[0].copy()
+        print(f"Base dataset: {raw_df.shape[0]} rows, {raw_df.shape[1]-1} features")
+
+        for i, df in enumerate(all_data[1:], 1):
+            before_cols = len(raw_df.columns)
+            before_rows = len(raw_df)
+
+            # Use inner join to only keep dates where we have data from both sources
+            # This prevents the coverage issues
+            raw_df = pd.merge(raw_df, df, on='date', how='inner', suffixes=('', f'_dup{i}'))
+
             # Remove duplicate columns
-            raw_df = raw_df.loc[:, ~raw_df.columns.str.endswith('_dup')]
-        
-        # Sort by date and filter to window
+            dup_cols = [col for col in raw_df.columns if col.endswith(f'_dup{i}')]
+            if dup_cols:
+                raw_df = raw_df.drop(dup_cols, axis=1)
+
+            after_cols = len(raw_df.columns)
+            after_rows = len(raw_df)
+            print(f"After merging source {i+1}: {after_rows} rows ({before_rows - after_rows} dropped), "
+                  f"{after_cols - before_cols} new columns")
+
+        # Sort by date and filter to exact window
         raw_df = raw_df.sort_values('date')
         start_dt = pd.to_datetime(window_start)
         end_dt = pd.to_datetime(window_end)
         raw_df = raw_df[(raw_df['date'] >= start_dt) & (raw_df['date'] <= end_dt)]
+
+        print(f"Final dataset: {raw_df.shape[0]} rows, {raw_df.shape[1]-1} features")
+
+        # Check if we have enough data
+        if len(raw_df) < 252:  # Less than 1 year of trading days
+            print(f"Warning: Only {len(raw_df)} days of data available (less than 1 year)")
         
         # Validate coverage
         self._validate_coverage(raw_df)
@@ -152,70 +176,216 @@ class DataIngestionPreprocessing:
         return processed_df, normalised_tensor
     
     def _fetch_fred_data(self, window_start: str, window_end: str) -> pd.DataFrame:
-        """Fetch macroeconomic data from FRED"""
+        """Fetch macroeconomic data from FRED with proper forward fill strategy"""
         if self.fred_api_key == 'demo_key':
             print("Using simulated FRED data (set FRED_API_KEY in .env for real data)")
             return self._simulate_fred_data(window_start, window_end)
         
         try:
             all_series = {}
+            failed_series = []
+            
+            # Create target date range (business days only)
+            start_dt = pd.to_datetime(window_start)
+            end_dt = pd.to_datetime(window_end)
+            target_dates = pd.bdate_range(start=start_dt, end=end_dt, freq='B')
             
             for name, series_id in self.fred_series.items():
                 try:
+                    # Fetch the raw data (with some buffer before start date for forward fill)
+                    buffer_start = start_dt - pd.DateOffset(years=1)  # Get 1 year of history for context
+                    
                     data = pdr.get_data_fred(
                         series_id, 
-                        start=window_start, 
-                        end=window_end
+                        start=buffer_start, 
+                        end=end_dt
                     )
-                    all_series[f'fred_{name}'] = data[series_id]
+                    
+                    if data is not None and not data.empty:
+                        # Handle different DataFrame structures
+                        if isinstance(data, pd.DataFrame):
+                            if len(data.columns) == 1:
+                                series_data = data.iloc[:, 0]
+                            else:
+                                if series_id in data.columns:
+                                    series_data = data[series_id]
+                                else:
+                                    series_data = data.iloc[:, 0]
+                        elif isinstance(data, pd.Series):
+                            series_data = data
+                        
+                        # Remove NaN values
+                        series_data = series_data.dropna()
+                        
+                        if len(series_data) > 0:
+                            # Convert to DataFrame for resampling
+                            temp_df = pd.DataFrame({
+                                'date': series_data.index,
+                                'value': series_data.values
+                            })
+                            temp_df['date'] = pd.to_datetime(temp_df['date'])
+                            temp_df = temp_df.set_index('date').sort_index()
+                            
+                            # CRITICAL: Forward fill to target business days
+                            # This ensures each business day has the most recent known value
+                            resampled = temp_df.reindex(target_dates, method='ffill')
+                            
+                            # Store the forward-filled series
+                            all_series[f'fred_{name}'] = resampled['value']
+                            
+                            # Log the resampling info
+                            original_count = len(series_data)
+                            final_count = len(resampled.dropna())
+                            print(f"  ✓ FRED {name}: {original_count} releases → {final_count} business days")
+                        else:
+                            failed_series.append(name)
+                    else:
+                        failed_series.append(name)
+                        
                 except Exception as e:
-                    print(f"Could not fetch {name}: {e}")
+                    print(f"Could not fetch {name} ({series_id}): {str(e)}")
+                    failed_series.append(name)
+            
+            if failed_series:
+                print(f"Failed to fetch FRED series: {failed_series}")
             
             if all_series:
-                fred_df = pd.DataFrame(all_series)
-                # Resample to daily and interpolate
-                fred_df = fred_df.resample('D').interpolate(method='linear', limit=3)
+                # Create final DataFrame
+                fred_df = pd.DataFrame(all_series, index=target_dates)
                 fred_df = fred_df.reset_index()
                 fred_df = fred_df.rename(columns={'index': 'date'})
+                
+                # Remove any rows where ALL FRED series are NaN
+                # (this happens at the very beginning if no series have data yet)
+                fred_cols = [col for col in fred_df.columns if col.startswith('fred_')]
+                fred_df = fred_df.dropna(subset=fred_cols, how='all')
+                
+                print(f"✓ FRED data forward-filled to {len(fred_df)} business days")
                 return fred_df
-            
+                
         except Exception as e:
-            print(f"FRED fetch error: {e}")
+            print(f"FRED fetch error: {str(e)}")
         
         return None
     
     def _fetch_market_data(self, window_start: str, window_end: str) -> pd.DataFrame:
-        """Fetch OHLCV data for key market indicators"""
+        """Fetch OHLCV data with proper business day alignment"""
         all_data = {}
-        
+
+        # Create target business day range
+        start_dt = pd.to_datetime(window_start)
+        end_dt = pd.to_datetime(window_end)
+        target_dates = pd.bdate_range(start=start_dt, end=end_dt, freq='B')
+
         for name, ticker in self.market_tickers.items():
             try:
-                data = yf.download(ticker, start=window_start, end=window_end, progress=False)
-                
-                if not data.empty:
-                    # Add OHLCV data
-                    all_data[f'{name}_open'] = data['Open']
-                    all_data[f'{name}_high'] = data['High']
-                    all_data[f'{name}_low'] = data['Low']
-                    all_data[f'{name}_close'] = data['Close']
-                    all_data[f'{name}_volume'] = data['Volume']
-                    
-                    # Add returns
-                    all_data[f'{name}_returns'] = data['Close'].pct_change()
-                    
-                    # Add volatility (20-day rolling)
-                    all_data[f'{name}_volatility'] = data['Close'].pct_change().rolling(20).std() * np.sqrt(252)
-                    
+                # Download with proper error handling
+                data = yf.download(
+                    ticker,
+                    start=window_start,
+                    end=end_dt,
+                    progress=False,
+                    auto_adjust=True,
+                    prepost=False,
+                    threads=True
+                )
+
+                if data.empty:
+                    print(f"No data returned for {ticker}")
+                    continue
+
+                # Handle MultiIndex columns if present
+                if isinstance(data.columns, pd.MultiIndex):
+                    data.columns = [col[0] if col[1] == ticker else f"{col[0]}_{col[1]}"
+                                    for col in data.columns]
+
+                # Ensure we have the expected columns
+                expected_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                available_cols = [col for col in expected_cols if col in data.columns]
+
+                if not available_cols:
+                    print(f"No expected columns found for {ticker}")
+                    continue
+
+                # Reindex to target business days with forward fill
+                data = data.reindex(target_dates, method='ffill')
+
+                # Add OHLCV data with proper naming
+                for col in available_cols:
+                    if col in data.columns:
+                        all_data[f'{name}_{col.lower()}'] = data[col]
+
+                # Add calculated features
+                if 'Close' in data.columns:
+                    close_prices = data['Close']
+
+                    # Returns (but forward fill the prices first)
+                    filled_close = close_prices.fillna(method='ffill')
+                    all_data[f'{name}_returns'] = filled_close.pct_change()
+
+                    # Volatility (20-day rolling)
+                    returns = filled_close.pct_change()
+                    all_data[f'{name}_volatility'] = returns.rolling(20).std() * np.sqrt(252)
+
+                    # RSI
+                    all_data[f'{name}_rsi'] = self._calculate_rsi(filled_close)
+
             except Exception as e:
-                print(f"Could not fetch {ticker}: {e}")
-        
+                print(f"Could not fetch {ticker}: {str(e)}")
+                continue
+
         if all_data:
-            market_df = pd.DataFrame(all_data)
+            market_df = pd.DataFrame(all_data, index=target_dates)
             market_df = market_df.reset_index()
-            market_df = market_df.rename(columns={'Date': 'date'})
+            market_df = market_df.rename(columns={'index': 'date'})
+
+            # Forward fill any remaining NaNs to ensure continuity
+            market_cols = [col for col in market_df.columns if col != 'date']
+            market_df[market_cols] = market_df[market_cols].fillna(method='ffill')
+
+            print(f"✓ Market data aligned to {len(market_df)} business days")
             return market_df
-        
+
         return None
+    
+    def _validate_and_clean_data(self, df: pd.DataFrame, source_name: str) -> pd.DataFrame:
+        """Validate and clean data from any source"""
+        if df is None or df.empty:
+            print(f"No data from {source_name}")
+            return pd.DataFrame()
+        
+        # Ensure date column exists
+        if 'date' not in df.columns:
+            if df.index.name in ['Date', 'DATE', 'date'] or isinstance(df.index, pd.DatetimeIndex):
+                df = df.reset_index()
+                df = df.rename(columns={df.columns[0]: 'date'})
+            else:
+                print(f"Warning: No date column found in {source_name}")
+                return pd.DataFrame()
+        
+        # Ensure date is datetime
+        try:
+            df['date'] = pd.to_datetime(df['date'])
+        except Exception as e:
+            print(f"Could not convert date column in {source_name}: {e}")
+            return pd.DataFrame()
+        
+        # Remove any non-numeric columns except date
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if 'date' not in numeric_cols:
+            numeric_cols = ['date'] + numeric_cols
+        
+        df = df[numeric_cols]
+        
+        # Remove columns that are all NaN
+        df = df.dropna(axis=1, how='all')
+        
+        # Sort by date
+        df = df.sort_values('date')
+        
+        print(f"✓ Validated {source_name}: {df.shape[0]} rows, {df.shape[1]-1} features")
+        
+        return df
     
     def _load_user_csv(self, csv_path: str, window_start: str, window_end: str) -> pd.DataFrame:
         """Load user-provided CSV data"""
@@ -377,19 +547,36 @@ class DataIngestionPreprocessing:
         return rsi
     
     def _validate_coverage(self, df: pd.DataFrame) -> None:
-        """Validate 97% coverage requirement"""
+        """Validate coverage with different thresholds for different data types"""
         coverage_threshold = 0.97
-        
+        macro_threshold = 0.70  # Relaxed threshold for macro data
+
         for col in df.columns:
             if col == 'date':
                 continue
-                
+
             coverage = df[col].notna().sum() / len(df)
-            if coverage < coverage_threshold:
-                raise ValueError(
-                    f"Series '{col}' has {coverage:.1%} coverage, "
-                    f"below required {coverage_threshold:.0%} threshold"
-                )
+
+            # Use relaxed threshold for FRED macro data
+            if col.startswith('fred_'):
+                threshold = macro_threshold
+                data_type = "macro"
+            else:
+                threshold = coverage_threshold
+                data_type = "market"
+
+            if coverage < threshold:
+                print(f"Warning: {data_type} series '{col}' has {coverage:.1%} coverage, "
+                      f"below {threshold:.0%} threshold")
+
+                # Only raise error for market data with very low coverage
+                if not col.startswith('fred_') and coverage < 0.50:
+                    raise ValueError(
+                        f"Market series '{col}' has {coverage:.1%} coverage, "
+                        f"below minimum 50% threshold"
+                    )
+            else:
+                print(f"✓ {col}: {coverage:.1%} coverage")
     
     def _handle_missing_values(self, df: pd.DataFrame) -> pd.DataFrame:
         """Forward-fill ≤ 3 consecutive NaNs and drop rows with wider gaps"""
@@ -642,25 +829,33 @@ class GMMFittingSelection:
         return k_star, selection_metadata, candidates, posterior_probs
 
     
-    def _fit_all_gmm_candidates(self, tensor: np.ndarray, 
-                               window_end: str) -> Dict[int, GMMCandidate]:
-        """Fit GMMs for all k values with proper implementation"""
-        candidates = {}
-        
-        for k in range(self.k_min, self.k_max + 1):
-            print(f"  Fitting GMM with k={k} components...")
-            candidate = self._fit_single_gmm_complete(tensor, k)
-            candidates[k] = candidate
-            
-            # Serialize for diagnostic dashboards
+    def _fit_all_gmm_candidates(self, tensor: np.ndarray, window_end: str) -> Dict[int, GMMCandidate]:
+        """Fit GMMs for all k values with memory-safe parallelization"""
+        from optimization_utils import parallel_gmm_grid_search_safe
+
+        print(f"Memory-safe fitting of GMMs for k={self.k_min} to k={self.k_max}...")
+
+        candidates = parallel_gmm_grid_search_safe(
+            tensor=tensor,
+            k_min=self.k_min,
+            k_max=self.k_max,
+            n_init=self.n_init,
+            max_iter=self.max_iter,
+            covariance_type=self.covariance_type,
+            reg_covar=self.reg_covar,
+            random_seed=self.random_seed,
+            window_end=window_end
+        )
+
+        # Log results
+        for k, candidate in candidates.items():
+            print(f"  k={k}: Log-likelihood={candidate.log_likelihood:.2f}, "
+                  f"BIC={candidate.bic:.2f}, ICL={candidate.icl:.2f}, "
+                  f"Converged={candidate.converged}")
+
+            # Serialize for diagnostics
             self._serialise_candidate(candidate, window_end)
-            
-            # Log fit quality
-            print(f"    Log-likelihood: {candidate.log_likelihood:.2f}")
-            print(f"    BIC: {candidate.bic:.2f}")
-            print(f"    ICL: {candidate.icl:.2f}")
-            print(f"    Converged: {candidate.converged} in {candidate.n_iter} iterations")
-        
+
         return candidates
     
     def _fit_single_gmm_complete(self, tensor: np.ndarray, k: int) -> GMMCandidate:

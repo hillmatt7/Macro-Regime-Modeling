@@ -17,6 +17,7 @@ import os
 from typing import Dict, Tuple, List
 import time
 from joblib import Parallel, delayed, dump, load, parallel_backend
+from typing import Dict, Tuple, List, Optional
 import tempfile
 
 warnings.filterwarnings('ignore')
@@ -330,3 +331,191 @@ def fast_elbow_detection(log_likelihoods: List[float], k_values: List[int]) -> i
     elbow_idx = max(1, min(elbow_idx, len(k_values) - 1))
     
     return k_values[elbow_idx]
+
+def single_gmm_worker_safe(args: Tuple) -> Tuple[int, Optional[Dict]]:
+    """Memory-safe GMM worker for k-selection only"""
+    k, tensor_path, params = args
+    
+    try:
+        # Check memory before starting
+        available_gb = psutil.virtual_memory().available / (1024**3)
+        if available_gb < 0.5:
+            return k, None
+        
+        # Load tensor from memmap (read-only)
+        tensor = load(tensor_path, mmap_mode='r')
+        
+        # Fit GMM
+        gmm = GaussianMixture(
+            n_components=k,
+            covariance_type=params['covariance_type'],
+            n_init=params['n_init'],
+            random_state=params['random_seed'] + k,
+            max_iter=params['max_iter'],
+            init_params='kmeans',
+            reg_covar=params['reg_covar'],
+            warm_start=False,
+            tol=params.get('tol', 1e-3)
+        )
+        
+        gmm.fit(tensor)
+        
+        # Get predictions and probabilities
+        labels = gmm.predict(tensor)
+        posterior_probs = gmm.predict_proba(tensor)
+        
+        # Calculate metrics
+        n_samples, n_features = tensor.shape
+        log_likelihood = gmm.score_samples(tensor).sum()
+        
+        # Count parameters
+        if params['covariance_type'] == 'full':
+            n_parameters = k * n_features + k * n_features * (n_features + 1) // 2 + k - 1
+        else:
+            n_parameters = k * n_features * 2 + k - 1
+        
+        # BIC and AIC
+        bic = -2 * log_likelihood + n_parameters * np.log(n_samples)
+        aic = -2 * log_likelihood + 2 * n_parameters
+        
+        # ICL = BIC - 2 * entropy
+        clipped_probs = np.clip(posterior_probs, 1e-10, 1.0)
+        entropy = -np.sum(posterior_probs * np.log(clipped_probs))
+        icl = bic - 2 * entropy
+        
+        # Return result with model parameters
+        result = {
+            'k': k,
+            'log_likelihood': log_likelihood,
+            'bic': bic,
+            'icl': icl,
+            'aic': aic,
+            'labels': labels,
+            'posterior_probs': posterior_probs,
+            'converged': gmm.converged_,
+            'n_iter': gmm.n_iter_,
+            'means': gmm.means_,
+            'covariances': gmm.covariances_,
+            'weights': gmm.weights_,
+            'precisions_cholesky': gmm.precisions_cholesky_
+        }
+        
+        return k, result
+        
+    except Exception as e:
+        print(f"GMM k={k} failed: {e}")
+        return k, None
+
+
+def parallel_gmm_grid_search_safe(tensor: np.ndarray,
+                                k_min: int,
+                                k_max: int,
+                                n_init: int = 10,
+                                max_iter: int = 1000,
+                                covariance_type: str = 'full',
+                                reg_covar: float = 1e-6,
+                                random_seed: int = 42,
+                                window_end: str = None) -> Dict:
+    """Memory-safe parallel GMM k-selection"""
+    from core import GMMCandidate
+    import tempfile
+    import os
+    from joblib import Parallel, delayed, dump, load, parallel_backend
+    
+    start_time = time.time()
+    
+    # Calculate safe number of workers
+    tensor_size_gb = tensor.nbytes / (1024**3)
+    available_gb = psutil.virtual_memory().available / (1024**3)
+    
+    # Conservative memory estimation
+    memory_per_worker = tensor_size_gb * 1.5 + 0.3  # Tensor + overhead
+    max_workers_memory = max(1, int(available_gb * 0.6 / memory_per_worker))
+    max_workers_cpu = max(1, psutil.cpu_count() - 1)
+    n_workers = min(max_workers_memory, max_workers_cpu, k_max - k_min + 1)
+    
+    # Reduce n_init for large tensors
+    if tensor_size_gb > 1.0:
+        safe_n_init = max(5, n_init // 2)
+    else:
+        safe_n_init = n_init
+    
+    print(f"  Using {n_workers} workers with {safe_n_init} initializations each")
+    print(f"  Tensor: {tensor_size_gb:.2f} GB, Available: {available_gb:.2f} GB")
+    
+    # Create temporary memmap
+    fd, tensor_path = tempfile.mkstemp(suffix=".mmap")
+    os.close(fd)
+    dump(tensor.astype(np.float64), tensor_path)
+    
+    try:
+        # Prepare parameters
+        params = {
+            'covariance_type': covariance_type,
+            'n_init': safe_n_init,
+            'max_iter': max_iter,
+            'reg_covar': reg_covar,
+            'random_seed': random_seed,
+            'tol': 1e-3
+        }
+        
+        # Prepare work items
+        k_values = list(range(k_min, k_max + 1))
+        work_items = [(k, tensor_path, params) for k in k_values]
+        
+        # Execute in parallel
+        with parallel_backend("loky", inner_max_num_threads=1):
+            results = Parallel(
+                n_jobs=n_workers,
+                prefer="processes",
+                batch_size=1,
+                verbose=10
+            )(delayed(single_gmm_worker_safe)(item) for item in work_items)
+        
+        # Build candidates dictionary
+        candidates = {}
+        for k, result in results:
+            if result is not None:
+                # Reconstruct GMM model
+                gmm = GaussianMixture(
+                    n_components=k,
+                    covariance_type=covariance_type,
+                    random_state=random_seed
+                )
+                
+                # Set fitted parameters
+                gmm.weights_ = result['weights']
+                gmm.means_ = result['means']
+                gmm.covariances_ = result['covariances']
+                gmm.precisions_cholesky_ = result['precisions_cholesky']
+                gmm.converged_ = result['converged']
+                gmm.n_iter_ = result['n_iter']
+                gmm.lower_bound_ = result['log_likelihood']
+                
+                # Create candidate
+                candidate = GMMCandidate(
+                    k=k,
+                    log_likelihood=result['log_likelihood'],
+                    bic=result['bic'],
+                    icl=result['icl'],
+                    aic=result['aic'],
+                    labels=result['labels'],
+                    posterior_probs=result['posterior_probs'],
+                    model=gmm,
+                    converged=result['converged'],
+                    n_iter=result['n_iter']
+                )
+                
+                candidates[k] = candidate
+        
+        elapsed_time = time.time() - start_time
+        print(f"  Parallel k-selection completed in {elapsed_time:.1f}s")
+        print(f"  Successfully fitted {len(candidates)}/{len(k_values)} models")
+        
+        return candidates
+        
+    finally:
+        # Clean up
+        if os.path.exists(tensor_path):
+            os.remove(tensor_path)
+        gc.collect()
