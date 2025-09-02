@@ -40,14 +40,6 @@ graph TD
   C --> D["Labels & Change Detection: Immutable artifacts"]
   D --> E["Interpretation: LightGBM + SHAP"]
   D --> F["Forecasting: LSTM"]
-  E --> G["Signal Publishing"]
-  F --> G
-  G --> H["Monitoring & Freeze"]
-  I["Streamlit App"] --> A
-  I --> C
-  I --> E
-  I --> F
-  I --> H
 ```
 
 ---
