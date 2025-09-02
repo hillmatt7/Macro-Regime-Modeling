@@ -35,16 +35,16 @@ Tip: No data/API key? Check “Use demo data”.
 ### Architecture
 ```mermaid
 graph TD
-  A[Data Ingestion<br/>(FRED + Market + CSV)] --> B[Preprocessing<br/>Winsorize + Z-score + Indicators]
-  B --> C[GMM Fitting & Selection<br/>ICL + Elbow + Bootstrap ARI]
-  C --> D[Labels & Change Detection<br/>Immutable artifacts]
-  D --> E[Interpretation<br/>LightGBM + SHAP]
-  D --> F[Forecasting<br/>LSTM]
-  E --> G[Signal Publishing]
+  A["Data Ingestion (FRED + Market + CSV)"] --> B["Preprocessing: Winsorize + Z-score + Indicators"]
+  B --> C["GMM Fitting & Selection: ICL + Elbow + Bootstrap ARI"]
+  C --> D["Labels & Change Detection: Immutable artifacts"]
+  D --> E["Interpretation: LightGBM + SHAP"]
+  D --> F["Forecasting: LSTM"]
+  E --> G["Signal Publishing"]
   F --> G
-  G --> H[Monitoring & Freeze]
-  I[Scheduling & Reproducibility] -.-> A
-  J[Streamlit App] --> A
+  G --> H["Monitoring & Freeze"]
+  I["Scheduling & Reproducibility"] -.-> A
+  J["Streamlit App"] --> A
   J --> C
   J --> E
   J --> F
