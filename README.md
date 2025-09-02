@@ -43,12 +43,11 @@ graph TD
   E --> G["Signal Publishing"]
   F --> G
   G --> H["Monitoring & Freeze"]
-  I["Scheduling & Reproducibility"] -.-> A
-  J["Streamlit App"] --> A
-  J --> C
-  J --> E
-  J --> F
-  J --> H
+  I["Streamlit App"] --> A
+  I --> C
+  I --> E
+  I --> F
+  I --> H
 ```
 
 ---
