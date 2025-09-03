@@ -3,7 +3,6 @@
 A production-ready pipeline to detect, interpret, and forecast macro market regimes, with a fully featured Streamlit app for exploration and reporting.
 
 ### Highlights
-- **End-to-end pipeline**: ingestion → preprocessing → GMM regime detection → label materialization/change detection → SHAP interpretation (LightGBM) → LSTM forecasting → signal publishing/monitoring → scheduling & reproducibility.
 - **Rich data**: always fetches FRED macro data and market OHLCV (SPY, ES, NQ, VIX, DXY, TLT, GLD, USO), with optional user CSV merge or demo data.
 - **Robust model selection**: ICL with elbow detection and bootstrap stability (ARI) checks.
 - **Explainability**: SHAP feature importances with persisted artifacts.
