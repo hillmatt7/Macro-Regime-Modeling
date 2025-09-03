@@ -146,6 +146,7 @@ graph TD
 ---
 
 ### License
-Add a license file (e.g., MIT) if distributing or sharing publicly.
+The code in this project is licensed under the MIT License. See the LICENSE file for details.
+
 
 
