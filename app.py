@@ -94,10 +94,10 @@ class MacroRegimePipelineApp:
     
     def setup_sidebar(self):
         """Setup sidebar with configuration options"""
-        st.sidebar.title("⚙️ Pipeline Configuration")
+        st.sidebar.title("Pipeline Configuration")
         
         # Data source selection
-        st.sidebar.header("📊 Data Source")
+        st.sidebar.header("Data Source")
         
         # Primary data source (always FRED + market data)
         st.sidebar.info("The pipeline always fetches:\n• FRED macro data\n• Market OHLCV (SPY, ES, NQ, etc.)")
@@ -119,7 +119,7 @@ class MacroRegimePipelineApp:
         )
         
         # Date range selection
-        st.sidebar.header("📅 Date Range")
+        st.sidebar.header("Date Range")
         col1, col2 = st.sidebar.columns(2)
         
         with col1:
@@ -139,7 +139,7 @@ class MacroRegimePipelineApp:
             )
         
         # K-selection parameters
-        st.sidebar.header("🎯 Regime Detection")
+        st.sidebar.header("Regime Detection")
         self.k_min = st.sidebar.slider("Minimum k", 1, 10, 1)
         self.k_max = st.sidebar.slider("Maximum k", self.k_min, 20, 10)
         
@@ -162,7 +162,7 @@ class MacroRegimePipelineApp:
             self.bootstrap_samples = st.number_input("Bootstrap samples", value=500, min_value=100)
             self.ari_threshold = st.number_input("ARI threshold", value=0.85, min_value=0.5, max_value=1.0)
         
-        # FRED API key
+        # FRED key
         with st.sidebar.expander("🔑 API Configuration"):
             fred_key = st.text_input("FRED API Key (optional)", type="password")
             if fred_key:
@@ -184,13 +184,13 @@ class MacroRegimePipelineApp:
         try:
             # Initialize components
             with status_container:
-                st.info("🔄 Initializing pipeline components...")
+                st.info("Initializing pipeline components...")
             
             # Step 1-2: Data ingestion and preprocessing
             data_processor = DataIngestionPreprocessing()
             
             with status_container:
-                st.info("📥 Loading FRED macro data and market OHLCV...")
+                st.info("Loading FRED macro data and market OHLCV...")
             
             # Prepare CSV path if uploaded
             csv_path = None
@@ -214,7 +214,7 @@ class MacroRegimePipelineApp:
             progress_bar.progress(20)
             
             with status_container:
-                st.success(f"✓ Loaded {len(raw_data)} days of data with {len(data_processor.feature_names)} features")
+                st.success(f"Loaded {len(raw_data)} days of data with {len(data_processor.feature_names)} features")
             
             # Step 3-4: GMM fitting and selection
             gmm_selector = GMMFittingSelection(
@@ -226,7 +226,7 @@ class MacroRegimePipelineApp:
             gmm_selector.ari_threshold = self.ari_threshold
             
             with status_container:
-                st.info(f"🔍 Fitting GMMs for k={self.k_min} to k={self.k_max}...")
+                st.info(f"Fitting GMMs for k={self.k_min} to k={self.k_max}...")
             
             k_star, selection_metadata, candidates, posterior_probs = gmm_selector.fit_and_select(
                 processed_tensor,
@@ -239,14 +239,14 @@ class MacroRegimePipelineApp:
             progress_bar.progress(50)
             
             with status_container:
-                st.success(f"✓ Selected k={k_star} with ICL={selection_metadata['icl']:.2f}, "
+                st.success(f"Selected k={k_star} with ICL={selection_metadata['icl']:.2f}, "
                           f"Bootstrap ARI={selection_metadata['bootstrap_mean_ari']:.3f}")
             
             # Step 5-6: Label materialisation and change detection
             label_manager = LabelMaterialisation()
             
             with status_container:
-                st.info("🏷️ Materialising regime labels...")
+                st.info("Materialising regime labels...")
             
             selected_labels = candidates[k_star].labels
             dates = raw_data['date'] if 'date' in raw_data.columns else pd.date_range(
@@ -381,7 +381,7 @@ class MacroRegimePipelineApp:
             st.session_state.pipeline_results = results
             
             with status_container:
-                st.success("✅ Pipeline execution completed successfully!")
+                st.success("Pipeline execution completed successfully!")
             
             # Clean up temp files
             if csv_path and os.path.exists(csv_path):
@@ -391,7 +391,7 @@ class MacroRegimePipelineApp:
             
         except Exception as e:
             with status_container:
-                st.error(f"❌ Pipeline execution failed: {str(e)}")
+                st.error(f"Pipeline execution failed: {str(e)}")
                 with st.expander("🔍 Error Details"):
                     st.code(traceback.format_exc())
             return False
@@ -480,7 +480,7 @@ class MacroRegimePipelineApp:
     
     def display_regime_timeline(self):
         """Display comprehensive regime timeline"""
-        st.header("📈 Regime Timeline Analysis")
+        st.header("Regime Timeline Analysis")
         
         if st.session_state.regime_labels is None or st.session_state.raw_data is None:
             st.warning("No regime data available")
@@ -528,7 +528,7 @@ class MacroRegimePipelineApp:
         
         normalize = st.checkbox("Normalize features", value=True)
         
-        # Add regime shading WITHOUT annotations (to avoid the timestamp bug)
+        # Add regime shading without annotations to avoid the timestamp bug
         for regime in sorted(df['regime'].unique()):
             regime_mask = df['regime'] == regime
             regime_periods = []
@@ -551,7 +551,7 @@ class MacroRegimePipelineApp:
                 x0 = df.iloc[start]["date"]
                 x1 = df.iloc[end]["date"]
     
-                # Add rectangle WITHOUT annotation to avoid timestamp arithmetic bug
+                # Add rectangle without annotation
                 fig.add_vrect(
                     x0=x0,
                     x1=x1,
@@ -562,7 +562,7 @@ class MacroRegimePipelineApp:
                     row=1, col=1
                 )
         
-        # Plot selected features
+        # Plot features
         for feature in feature_selector:
             if feature in df.columns:
                 y_values = df[feature].values
@@ -613,7 +613,7 @@ class MacroRegimePipelineApp:
                 row=2, col=1
             )
         
-        # Add regime shading to subplot 2 as well
+        # Add regime shading to subplot 2
         for regime in sorted(df['regime'].unique()):
             regime_mask = df['regime'] == regime
             regime_periods = []
@@ -679,8 +679,8 @@ class MacroRegimePipelineApp:
         
         st.plotly_chart(fig, use_container_width=True)
         
-        # Add regime labels as text annotations manually (safer approach)
-        st.subheader("🏷️ Regime Labels")
+        # Add regime labels as text annotations manually
+        st.subheader("Regime Labels")
         regime_info = []
         for regime in sorted(df['regime'].unique()):
             regime_df = df[df['regime'] == regime]
@@ -701,7 +701,7 @@ class MacroRegimePipelineApp:
     
     def display_regime_statistics(self, df: pd.DataFrame):
         """Display detailed regime statistics"""
-        st.subheader("📊 Regime Statistics")
+        st.subheader("Regime Statistics")
         
         col1, col2 = st.columns(2)
         
@@ -765,7 +765,7 @@ class MacroRegimePipelineApp:
     
     def display_model_selection(self):
         """Display comprehensive model selection analysis"""
-        st.header("🎯 Model Selection Analysis")
+        st.header("Model Selection Analysis")
         
         results = st.session_state.pipeline_results
         candidates = results['candidates']
@@ -1040,7 +1040,7 @@ class MacroRegimePipelineApp:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("📈 Regime Persistence")
+            st.subheader("Regime Persistence")
             
             persistence_data = []
             for i in range(n_regimes):
@@ -1056,7 +1056,7 @@ class MacroRegimePipelineApp:
             st.dataframe(pd.DataFrame(persistence_data), use_container_width=True)
         
         with col2:
-            st.subheader("🔄 Most Likely Transitions")
+            st.subheader("Most Likely Transitions")
             
             transitions = []
             for i in range(n_regimes):
@@ -1082,7 +1082,7 @@ class MacroRegimePipelineApp:
         
         # Forecast visualization
         if 'regime_predictions' in results['regime_forecast']:
-            st.subheader("📊 Regime Forecast Visualization")
+            st.subheader("Regime Forecast Visualization")
             
             predictions = results['regime_forecast']['regime_predictions']
             
@@ -1133,7 +1133,7 @@ class MacroRegimePipelineApp:
     
     def display_data_explorer(self):
         """Interactive data exploration"""
-        st.header("📊 Data Explorer")
+        st.header("Data Explorer")
         
         if st.session_state.raw_data is None:
             st.warning("No data available")
@@ -1155,7 +1155,7 @@ class MacroRegimePipelineApp:
             st.metric("Date Range", date_range)
         
         # Feature correlation matrix
-        st.subheader("🔗 Feature Correlations")
+        st.subheader("Feature Correlations")
         
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         
@@ -1189,7 +1189,7 @@ class MacroRegimePipelineApp:
                 st.plotly_chart(fig, use_container_width=True)
         
         # Time series visualization
-        st.subheader("📈 Time Series Visualization")
+        st.subheader("Time Series Visualization")
         
         selected_feature = st.selectbox(
             "Select feature to visualize",
@@ -1284,7 +1284,7 @@ class MacroRegimePipelineApp:
                 st.dataframe(legend_df, use_container_width=True)
         
         # Data sample
-        st.subheader("📋 Data Sample")
+        st.subheader("Data Sample")
         
         n_rows = st.slider("Number of rows to display", 10, 100, 25)
         
@@ -1302,12 +1302,12 @@ class MacroRegimePipelineApp:
     
     def display_export_options(self):
         """Export results and data"""
-        st.header("💾 Export Results")
+        st.header("Export Results")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("📥 Download Data")
+            st.subheader("Download Data")
             
             # Export regime labels with features
             if st.session_state.raw_data is not None and st.session_state.regime_labels is not None:
@@ -1324,7 +1324,7 @@ class MacroRegimePipelineApp:
                 
                 csv = export_df.to_csv(index=False)
                 st.download_button(
-                    label="📥 Download Complete Dataset (CSV)",
+                    label="Download Complete Dataset (CSV)",
                     data=csv,
                     file_name=f"regime_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
@@ -1334,14 +1334,14 @@ class MacroRegimePipelineApp:
             if st.session_state.pipeline_results:
                 results_json = json.dumps(st.session_state.pipeline_results, indent=2)
                 st.download_button(
-                    label="📥 Download Pipeline Results (JSON)",
+                    label="Download Pipeline Results (JSON)",
                     data=results_json,
                     file_name=f"pipeline_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                     mime="application/json"
                 )
         
         with col2:
-            st.subheader("📊 Export Visualizations")
+            st.subheader("Export Visualizations")
             
             st.info("""
             **To save any chart:**
@@ -1358,7 +1358,7 @@ class MacroRegimePipelineApp:
             if st.button("Generate Summary Report"):
                 report = self._generate_summary_report()
                 st.download_button(
-                    label="📥 Download Summary Report (TXT)",
+                    label="Download Summary Report (TXT)",
                     data=report,
                     file_name=f"regime_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                     mime="text/plain"
@@ -1426,7 +1426,7 @@ Portfolio Sharpe: {results['forecast']['final_metrics']['portfolio_sharpe']:.2f}
     
     def run(self):
         """Main app execution"""
-        st.title("🌐 Macro Regime Modelling Pipeline")
+        st.title("Macro Regime Modelling Pipeline")
         st.markdown("### Complete implementation with GMM clustering, SHAP interpretation, and LSTM forecasting")
         
         # Check if pipeline should run

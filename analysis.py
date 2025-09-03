@@ -484,7 +484,7 @@ class InterpretationForecasting:
                                         labels_hash: str,
                                         historical_windows: Optional[Dict] = None) -> Tuple[Dict, Dict]:
         """
-        Train both interpretation and forecasting models with proper implementation
+        Train both interpretation and forecasting models
         """
         self.feature_names = feature_names
         

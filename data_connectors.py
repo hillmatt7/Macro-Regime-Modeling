@@ -59,7 +59,6 @@ class YahooFinanceConnector(MacroFeatureStore):
             try:
                 data = yf.download(ticker, start=start_date, end=end_date, progress=False)
                 
-                # Add OHLCV features
                 all_features[f'{ticker}_open'] = data['Open']
                 all_features[f'{ticker}_high'] = data['High']
                 all_features[f'{ticker}_low'] = data['Low']

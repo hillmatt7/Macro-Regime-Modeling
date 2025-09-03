@@ -95,10 +95,10 @@ def generate_demo_macro_data(start_date="2014-01-01", end_date="2024-01-01", n_f
     # Create DataFrame
     df = pd.DataFrame(data)
     
-    # Add some realistic missing values (less than 3%)
+    # Add some realistic missing values
     for col in df.columns:
         if col != 'date':
-            # Randomly set some values to NaN
+            # Set some values to NaN
             mask = np.random.random(n_days) < 0.02  # 2% missing
             df.loc[mask, col] = np.nan
     
@@ -119,7 +119,6 @@ def main():
     df.to_csv("demo_macro_data.csv", index=False)
     print(f"✓ Saved demo_macro_data.csv with {len(df)} rows and {len(df.columns)} columns")
     
-    # Save true regimes for comparison (optional)
     regime_df = pd.DataFrame({
         'date': df['date'],
         'true_regime': true_regimes

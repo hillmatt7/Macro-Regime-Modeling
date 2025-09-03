@@ -126,9 +126,7 @@ def parallel_bootstrap_stability(tensor: np.ndarray,
         for i in range(n_samples)
     ]
     
-    # ------------------------------------------------------------------
-    # New high-throughput, low-overhead execution using joblib + memmap
-    # ------------------------------------------------------------------
+
     aris = []
 
     # 1) Dump the tensor once to a temporary memmap file
@@ -260,8 +258,7 @@ def compute_icl_bic_aic(gmm: GaussianMixture, tensor: np.ndarray, k: int) -> Tup
     bic = -2 * log_likelihood + n_parameters * np.log(n_samples)
     aic = -2 * log_likelihood + 2 * n_parameters
     
-    # ICL computation with memory-efficient approach
-    # Get posterior probabilities in chunks to avoid memory issues
+    # ICL computation
     chunk_size = min(1000, n_samples)
     entropy = 0.0
     
@@ -310,7 +307,6 @@ class MemoryMonitor:
               f"(+{delta:.1f}GB from start)")
 
 
-# Optimized version of elbow detection
 def fast_elbow_detection(log_likelihoods: List[float], k_values: List[int]) -> int:
     """
     Fast elbow detection using second derivative method

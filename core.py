@@ -236,7 +236,7 @@ class DataIngestionPreprocessing:
                             # Log the resampling info
                             original_count = len(series_data)
                             final_count = len(resampled.dropna())
-                            print(f"  ✓ FRED {name}: {original_count} releases → {final_count} business days")
+                            print(f"  FRED {name}: {original_count} releases → {final_count} business days")
                         else:
                             failed_series.append(name)
                     else:
@@ -260,7 +260,7 @@ class DataIngestionPreprocessing:
                 fred_cols = [col for col in fred_df.columns if col.startswith('fred_')]
                 fred_df = fred_df.dropna(subset=fred_cols, how='all')
                 
-                print(f"✓ FRED data forward-filled to {len(fred_df)} business days")
+                print(f"FRED data forward-filled to {len(fred_df)} business days")
                 return fred_df
                 
         except Exception as e:
@@ -319,11 +319,11 @@ class DataIngestionPreprocessing:
                 if 'Close' in data.columns:
                     close_prices = data['Close']
 
-                    # Returns (but forward fill the prices first)
+                    # Returns
                     filled_close = close_prices.fillna(method='ffill')
                     all_data[f'{name}_returns'] = filled_close.pct_change()
 
-                    # Volatility (20-day rolling)
+                    # Volatility, 20-day rolling
                     returns = filled_close.pct_change()
                     all_data[f'{name}_volatility'] = returns.rolling(20).std() * np.sqrt(252)
 
@@ -339,7 +339,7 @@ class DataIngestionPreprocessing:
             market_df = market_df.reset_index()
             market_df = market_df.rename(columns={'index': 'date'})
 
-            # Forward fill any remaining NaNs to ensure continuity
+            # Forward fill NaNs
             market_cols = [col for col in market_df.columns if col != 'date']
             market_df[market_cols] = market_df[market_cols].fillna(method='ffill')
 
@@ -383,7 +383,7 @@ class DataIngestionPreprocessing:
         # Sort by date
         df = df.sort_values('date')
         
-        print(f"✓ Validated {source_name}: {df.shape[0]} rows, {df.shape[1]-1} features")
+        print(f"Validated {source_name}: {df.shape[0]} rows, {df.shape[1]-1} features")
         
         return df
     
@@ -795,9 +795,8 @@ class GMMFittingSelection:
         Fit GMM(s) and return (k_star, metadata, all_candidates, posteriors)
         """
 
-        # ───────────────────────────────────────────────────────────
+        
         # 1.  Forced-k path  → fit ONE model, skip auto-selection
-        # ───────────────────────────────────────────────────────────
         if force_k is not None:
             print(f"Forced k={force_k}: fitting only that model.")
             candidate = self._fit_single_gmm_complete(tensor, force_k)
@@ -809,9 +808,8 @@ class GMMFittingSelection:
 
             # nothing else to pick, so continue with post-processing
         else:
-            # ───────────────────────────────────────────────────────
+            
             # 2.  Normal path  → fit full grid, then choose k*
-            # ───────────────────────────────────────────────────────
             print(f"Fitting GMMs for k={self.k_min} to k={self.k_max}...")
             candidates = self._fit_all_gmm_candidates(tensor, window_end)
 
@@ -820,9 +818,7 @@ class GMMFittingSelection:
                 candidates, tensor, window_end
             )
 
-        # ───────────────────────────────────────────────────────────
-        # Common post-processing
-        # ───────────────────────────────────────────────────────────
+        
         posterior_probs = candidates[k_star].posterior_probs
         self._persist_regime_outputs(candidates[k_star], window_end, selection_metadata)
 
@@ -830,10 +826,10 @@ class GMMFittingSelection:
 
     
     def _fit_all_gmm_candidates(self, tensor: np.ndarray, window_end: str) -> Dict[int, GMMCandidate]:
-        """Fit GMMs for all k values with memory-safe parallelization"""
+        """Fit GMMs for all k values"""
         from optimization_utils import parallel_gmm_grid_search_safe
 
-        print(f"Memory-safe fitting of GMMs for k={self.k_min} to k={self.k_max}...")
+        print(f"Fitting of GMMs for k={self.k_min} to k={self.k_max}...")
 
         candidates = parallel_gmm_grid_search_safe(
             tensor=tensor,
@@ -853,7 +849,6 @@ class GMMFittingSelection:
                   f"BIC={candidate.bic:.2f}, ICL={candidate.icl:.2f}, "
                   f"Converged={candidate.converged}")
 
-            # Serialize for diagnostics
             self._serialise_candidate(candidate, window_end)
 
         return candidates
@@ -1024,7 +1019,6 @@ class GMMFittingSelection:
     def _bootstrap_stability_check(self, tensor: np.ndarray, k_star: int,
                                  reference_labels: np.ndarray) -> Dict:
         """Bootstrap validation with parallel processing"""
-        # Use parallel implementation from optimization_utils
         results = parallel_bootstrap_stability(
             tensor=tensor,
             k_star=k_star,
@@ -1043,7 +1037,6 @@ class GMMFittingSelection:
         if force_k not in candidates:
             raise ValueError(f"k={force_k} not in candidates ({self.k_min}-{self.k_max})")
         
-        # Still run bootstrap validation
         print(f"Running bootstrap validation for forced k={force_k}...")
         
         bootstrap_results = self._bootstrap_stability_check(
@@ -1076,6 +1069,7 @@ class GMMFittingSelection:
     def _persist_regime_outputs(self, candidate: GMMCandidate, 
                               window_end: str, metadata: Dict) -> None:
         """Persist regime labels and posterior probabilities"""
+
         # Save hard labels
         labels_file = os.path.join(
             self.labels_dir,
@@ -1151,7 +1145,6 @@ class GMMFittingSelection:
         filename = f"gmm_candidate_k{candidate.k}_{window_end}.pkl"
         filepath = os.path.join(self.candidates_dir, filename)
         
-        # Don't save the full model object in candidate to save space
         save_candidate = GMMCandidate(
             k=candidate.k,
             log_likelihood=candidate.log_likelihood,
@@ -1160,7 +1153,7 @@ class GMMFittingSelection:
             aic=candidate.aic,
             labels=candidate.labels,
             posterior_probs=candidate.posterior_probs,
-            model=None,  # Model saved separately
+            model=None,
             converged=candidate.converged,
             n_iter=candidate.n_iter
         )
